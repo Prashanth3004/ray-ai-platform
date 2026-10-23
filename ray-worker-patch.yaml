@@ -1,0 +1,4 @@
+spec:
+  workerGroupSpecs:
+    - groupName: ray-workers
+      replicas: 1

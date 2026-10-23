@@ -1,0 +1,14 @@
+﻿# JM Comment: Submit the corporate data pipeline to the existing RayCluster.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: ray-ai-pipeline
+  namespace: default
+spec:
+  entrypoint: "python /workspace/app/ray_pipeline.py"
+  submissionMode: K8sJobMode
+  shutdownAfterJobFinishes: false
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  clusterSelector:
+    ray.io/cluster: ray-ai

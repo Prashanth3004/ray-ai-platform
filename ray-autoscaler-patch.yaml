@@ -1,0 +1,5 @@
+spec:
+  enableInTreeAutoscaling: true
+  autoscalerOptions:
+    version: v2
+    upscalingMode: Default

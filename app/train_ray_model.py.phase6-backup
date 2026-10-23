@@ -1,0 +1,167 @@
+
+# Train, checkpoint, and evaluate a revenue model with Ray Train and PyTorch.
+
+from pathlib import Path
+import tempfile
+
+import numpy as np
+import pandas as pd
+import ray
+import torch
+from ray import train
+from ray.train import Checkpoint, ScalingConfig
+from ray.train.torch import TorchTrainer
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+DATA_DIR = Path(__file__).parent / "data"
+
+
+class RevenueRegressor(nn.Module):
+    def __init__(self, input_size: int):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_size, 32),
+            nn.ReLU(),
+            nn.Linear(32, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+
+def train_loop_per_worker(config):
+    # JM Comment: Ray Train shards each worker's dataset and synchronizes gradients.
+    torch.manual_seed(42)
+
+    X = torch.tensor(config["X_train"], dtype=torch.float32)
+    y = torch.tensor(config["y_train"], dtype=torch.float32).reshape(-1, 1)
+
+    dataset = TensorDataset(X, y)
+    dataset = train.torch.prepare_data_loader(
+        DataLoader(dataset, batch_size=64, shuffle=True)
+    )
+
+    model = RevenueRegressor(config["input_size"])
+    model = train.torch.prepare_model(model)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    loss_fn = nn.MSELoss()
+
+    for epoch in range(config["epochs"]):
+        model.train()
+        total_loss = 0.0
+        batches = 0
+
+        for features, targets in dataset:
+            optimizer.zero_grad()
+            predictions = model(features)
+            loss = loss_fn(predictions, targets)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            batches += 1
+
+        metrics = {"train_loss": total_loss / max(batches, 1), "epoch": epoch + 1}
+
+        # Save a model checkpoint from the worker.
+        if train.get_context().get_world_rank() == 0:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                checkpoint_path = Path(temp_dir) / "model.pt"
+                torch.save(
+                    {
+                        "model_state_dict": model.module.state_dict(),
+                        "input_size": config["input_size"],
+                    },
+                    checkpoint_path,
+                )
+                train.report(
+                    metrics,
+                    checkpoint=Checkpoint.from_directory(temp_dir),
+                )
+        else:
+            train.report(metrics)
+
+
+def main():
+    ray.init(address="auto", include_dashboard=False)
+
+    try:
+        frames = [
+            pd.read_csv(DATA_DIR / "supply_chain.csv"),
+            pd.read_csv(DATA_DIR / "financial_data.csv"),
+        ]
+        df = pd.concat(frames, ignore_index=True)
+        df = df.dropna(
+            subset=["employee_count", "industry", "country", "annual_revenue"]
+        )
+
+        features = pd.get_dummies(
+            df[["employee_count", "industry", "country"]],
+            columns=["industry", "country"],
+            dtype=float,
+        )
+        target = pd.to_numeric(df["annual_revenue"], errors="raise").to_numpy(
+            dtype=np.float32
+        )
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            features.to_numpy(dtype=np.float32),
+            target,
+            test_size=0.2,
+            random_state=42,
+        )
+
+        # JM Comment: Scale the target to improve neural-network optimization.
+        revenue_scale = float(np.mean(y_train))
+        y_train_scaled = y_train / revenue_scale
+
+        trainer = TorchTrainer(
+            train_loop_per_worker,
+            train_loop_config={
+                "X_train": X_train.tolist(),
+                "y_train": y_train_scaled.tolist(),
+                "input_size": X_train.shape[1],
+                "epochs": 10,
+            },
+            scaling_config=ScalingConfig(num_workers=2, use_gpu=False),
+        )
+
+        result = trainer.fit()
+        if result.error:
+            raise RuntimeError("Ray Train failed") from result.error
+        if result.checkpoint is None:
+            raise RuntimeError("Ray Train completed without a model checkpoint")
+
+        checkpoint_dir = result.checkpoint.to_directory()
+        checkpoint_file = Path(checkpoint_dir) / "model.pt"
+        checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
+
+        model = RevenueRegressor(checkpoint["input_size"])
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+
+        with torch.no_grad():
+            scaled_predictions = model(torch.tensor(X_test, dtype=torch.float32))
+            predictions = scaled_predictions.numpy().reshape(-1) * revenue_scale
+
+        print("Ray Train status: SUCCESS")
+        print("Workers:", 2)
+        print("Records used:", len(df))
+        print("Training records:", len(X_train))
+        print("Test records:", len(X_test))
+        print(f"MAE: {mean_absolute_error(y_test, predictions):,.2f}")
+        print(f"R²: {r2_score(y_test, predictions):.4f}")
+
+    finally:
+        ray.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+
+

@@ -1,0 +1,26 @@
+spec:
+  enableInTreeAutoscaling: false
+  workerGroupSpecs:
+    - groupName: ray-workers
+      replicas: 1
+      minReplicas: 0
+      maxReplicas: 3
+      rayStartParams:
+        num-cpus: "1"
+      template:
+        spec:
+          nodeSelector:
+            workload: ray-worker
+          containers:
+            - name: ray-worker
+              image: 145023571604.dkr.ecr.us-east-1.amazonaws.com/ray-ai-platform:v6
+              env:
+                - name: S3_BUCKET
+                  value: ray-ai-platform-145023571604
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "1Gi"
+                limits:
+                  cpu: "1"
+                  memory: "2Gi"

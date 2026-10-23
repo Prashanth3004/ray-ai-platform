@@ -1,0 +1,10 @@
+# Dependencies for the Ray data-processing pipeline.
+ray[default,data]==2.59.0
+pandas
+pyarrow
+numpy
+scikit-learn
+typing_extensions
+boto3
+pyiceberg[glue]
+torch
