@@ -85,48 +85,59 @@ pipeline {
             }
         }
 
-        stage('Trigger RayJob') {
-            when {
-                branch 'master'
+       
+stage('Trigger RayJob') {
+    when {
+        branch 'master'
+    }
+    steps {
+        sh '''
+            set -eu
+
+            # JM Comment: Render both Ray containers with the exact image built by this Jenkins run.
+            export ECR_IMAGE="${ECR_REPOSITORY}:${IMAGE_TAG}"
+            envsubst '${ECR_IMAGE}' < kubernetes/rayjob-template.yaml > rayjob-rendered.yaml
+
+            # JM Comment: Fail fast unless both head and worker images match this build.
+            test "$(grep -Fc "image: \\"${ECR_IMAGE}\\"" rayjob-rendered.yaml)" -eq 2 || {
+                echo "ERROR: Head and worker images do not match ${ECR_IMAGE}"
+                grep -n 'image:' rayjob-rendered.yaml
+                exit 1
             }
-            steps {
-                sh '''
-                    set -eu
 
-                    # JM Comment: Use a RayJob template configured with rayClusterSpec.
-                    # Its head and worker images must both use the new IMAGE_TAG.
-                    export IMAGE_TAG
-                    envsubst < kubernetes/rayjob-template.yaml > rayjob-rendered.yaml
+            # JM Comment: Remove the previous RayJob so its FAILED status cannot affect this run.
+            kubectl delete rayjob ray-ai-pipeline -n default --ignore-not-found --wait=true
 
-                    kubectl apply --dry-run=server -f rayjob-rendered.yaml
-                    kubectl apply -f rayjob-rendered.yaml
+            # JM Comment: Validate and create a fresh RayJob using the current image.
+            kubectl apply --dry-run=server -f rayjob-rendered.yaml
+            kubectl apply -f rayjob-rendered.yaml
 
-                    # JM Comment: Poll RayJob status for up to 30 minutes.
-                    for i in $(seq 1 180); do
-                      STATUS=$(kubectl get rayjob ray-ai-pipeline \
-                        -n default -o jsonpath='{.status.jobStatus}' 2>/dev/null || true)
+            # JM Comment: Poll the new RayJob status for up to 30 minutes.
+            for i in $(seq 1 180); do
+              STATUS=$(kubectl get rayjob ray-ai-pipeline \
+                -n default -o jsonpath='{.status.jobStatus}' 2>/dev/null || true)
 
-                      echo "RayJob status: ${STATUS:-Pending}"
+              echo "RayJob status: ${STATUS:-Pending}"
 
-                      case "$STATUS" in
-                        SUCCEEDED)
-                          exit 0
-                          ;;
-                        FAILED|STOPPED)
-                          kubectl describe rayjob ray-ai-pipeline -n default
-                          exit 1
-                          ;;
-                      esac
+              case "$STATUS" in
+                SUCCEEDED)
+                  exit 0
+                  ;;
+                FAILED|STOPPED)
+                  kubectl describe rayjob ray-ai-pipeline -n default
+                  exit 1
+                  ;;
+              esac
 
-                      sleep 10
-                    done
+              sleep 10
+            done
 
-                    echo "RayJob timed out after 30 minutes."
-                    kubectl describe rayjob ray-ai-pipeline -n default
-                    exit 1
-                '''
-            }
-        }
+            echo "RayJob timed out after 30 minutes."
+            kubectl describe rayjob ray-ai-pipeline -n default
+            exit 1
+        '''
+    }
+}
 
         stage('Verify S3 Artifacts') {
             when {

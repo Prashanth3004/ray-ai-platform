@@ -78,7 +78,7 @@ spec:
               workload: ray-worker
             containers:
               - name: ray-worker
-                image: "145023571604.dkr.ecr.us-east-1.amazonaws.com/ray-ai-platform:${IMAGE_TAG}"
+                image: "${ECR_IMAGE}"
                 imagePullPolicy: Always
                 resources:
                   requests:
