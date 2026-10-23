@@ -1,34 +1,50 @@
 ﻿
-# JM Comment: Run the Ray pipeline in a dedicated Ray cluster for this CI build.
+# JM Comment: Run the entity-resolution and model-training pipeline on KubeRay.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
   name: ray-ai-pipeline
   namespace: default
+  labels:
+    app: ray-ai-pipeline
+    component: data-pipeline
+
 spec:
-  entrypoint: "python /workspace/app/ray_pipeline.py"
-  submissionMode: K8sJobMode
+  # JM Comment: Keep the job alive long enough for the pipeline to complete.
   shutdownAfterJobFinishes: true
-  ttlSecondsAfterFinished: 3600
-  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+
+  entrypoint: python /workspace/app/ray_pipeline.py
+
+  # JM Comment: Reuse the ECR image built and tagged by the Jenkins pipeline.
+  runtimeEnvYAML: |
+    env_vars:
+      S3_BUCKET: "ray-ai-platform-145023571604"
+      S3_PREFIX: "datasets"
+      AWS_REGION: "us-east-1"
+
   rayClusterSpec:
     rayVersion: "2.59.0"
+
     headGroupSpec:
+      # JM Comment: Keep the Ray head on the On-Demand system node pool.
       rayStartParams:
         dashboard-host: "0.0.0.0"
-        num-cpus: "1"
-        memory: "536870912"
+        num-cpus: "0"
+
       template:
+        metadata:
+          labels:
+            app: ray-ai-pipeline
+            ray-node-type: head
         spec:
           serviceAccountName: ray-ai
           nodeSelector:
             workload: system
           containers:
             - name: ray-head
-              image: 145023571604.dkr.ecr.us-east-1.amazonaws.com/ray-ai-platform:${IMAGE_TAG}
-              env:
-                - name: S3_BUCKET
-                  value: ray-ai-platform-145023571604
+              image: "${ECR_IMAGE}"
+              imagePullPolicy: Always
               resources:
                 requests:
                   cpu: "250m"
@@ -36,24 +52,34 @@ spec:
                 limits:
                   cpu: "500m"
                   memory: "1Gi"
+              ports:
+                - name: gcs
+                  containerPort: 6379
+                - name: dashboard
+                  containerPort: 8265
+                - name: client
+                  containerPort: 10001
+
+    # JM Comment: Schedule Ray workers on the Spot worker node pool.
     workerGroupSpecs:
-      - groupName: ray-workers
+      - groupName: ray-worker
         replicas: 1
         minReplicas: 0
         maxReplicas: 3
-        rayStartParams:
-          num-cpus: "1"
+        rayStartParams: {}
         template:
+          metadata:
+            labels:
+              app: ray-ai-pipeline
+              ray-node-type: worker
           spec:
             serviceAccountName: ray-ai
             nodeSelector:
               workload: ray-worker
             containers:
               - name: ray-worker
-                image: 145023571604.dkr.ecr.us-east-1.amazonaws.com/ray-ai-platform:${IMAGE_TAG}
-                env:
-                  - name: S3_BUCKET
-                    value: ray-ai-platform-145023571604
+                image: "${ECR_IMAGE}"
+                imagePullPolicy: Always
                 resources:
                   requests:
                     cpu: "500m"
