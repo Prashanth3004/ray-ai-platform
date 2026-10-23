@@ -14,7 +14,7 @@ spec:
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
 
-  entrypoint: python /workspace/app/ray_pipeline.py
+  entrypoint: python /workspace/app/run_pipeline.py
 
   # JM Comment: Reuse the ECR image built and tagged by the Jenkins pipeline.
   runtimeEnvYAML: |
@@ -22,6 +22,7 @@ spec:
       S3_BUCKET: "ray-ai-platform-145023571604"
       S3_PREFIX: "datasets"
       AWS_REGION: "us-east-1"
+      RAY_ADDRESS: "auto"
 
   rayClusterSpec:
     rayVersion: "2.59.0"
