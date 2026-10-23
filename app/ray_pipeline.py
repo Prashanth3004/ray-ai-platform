@@ -25,6 +25,82 @@ REQUIRED_COLUMNS = {
 
 
 def ingest_data(data_dir: Path = DATA_DIR) -> pd.DataFrame:
+    """Read corporate datasets directly from S3 or local development files."""
+    filenames = ["supply_chain.csv", "financial_data.csv"]
+
+    # JM Comment: Reuse the existing KubeRay runtime when available.
+    started_ray_here = not ray.is_initialized()
+    if started_ray_here:
+        ray.init(num_cpus=2, include_dashboard=False)
+
+    try:
+        datasets = []
+        for filename in filenames:
+            if S3_BUCKET:
+                # JM Comment: Use shared S3 storage instead of head-local temporary files.
+                path = (
+                    f"s3://{S3_BUCKET}/"
+                    f"{S3_PREFIX.rstrip('/')}/{filename}"
+                )
+            else:
+                # JM Comment: Keep local file support for development and tests.
+                path = str(data_dir / filename)
+                if not Path(path).is_file():
+                    raise FileNotFoundError(
+                        f"Required dataset not found: {path}"
+                    )
+
+            dataset = ray.data.read_csv(path)
+            missing = REQUIRED_COLUMNS - set(dataset.schema().names)
+            if missing:
+                raise ValueError(
+                    f"{filename} is missing columns: {sorted(missing)}"
+                )
+            datasets.append(dataset)
+
+        # JM Comment: Combine datasets after Ray reads them from shared storage.
+        combined = datasets[0].union(datasets[1]).to_pandas()
+    finally:
+        if started_ray_here:
+            ray.shutdown()
+
+    combined["employee_count"] = pd.to_numeric(
+        combined["employee_count"], errors="coerce"
+    )
+    combined["annual_revenue"] = pd.to_numeric(
+        combined["annual_revenue"], errors="coerce"
+    )
+    combined["corporate_name"] = (
+        combined["corporate_name"].astype("string").str.strip()
+    )
+
+    registration = combined["registration_id"].astype("string").str.strip()
+    invalid = (
+        combined["corporate_name"].isna()
+        | combined["corporate_name"].eq("")
+        | registration.isna()
+        | registration.eq("")
+        | combined["employee_count"].isna()
+        | combined["annual_revenue"].isna()
+    )
+
+    invalid_count = int(invalid.sum())
+    if invalid_count:
+        print(f"Warning: {invalid_count} invalid records detected.")
+
+    combined = combined.loc[~invalid].reset_index(drop=True)
+
+    print(f"Total records loaded: {len(combined)}")
+    print(
+        "Supply-chain records: "
+        f"{(combined['source_system'] == 'SupplyChain').sum()}"
+    )
+    print(
+        "Financial records: "
+        f"{(combined['source_system'] == 'Financial').sum()}"
+    )
+    return combined
+
     """Read both CSV datasets locally or download them from S3."""
     filenames = ["supply_chain.csv", "financial_data.csv"]
 
