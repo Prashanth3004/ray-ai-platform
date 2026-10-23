@@ -107,9 +107,6 @@ try:
     table = catalog.load_table("corporate_registry.corporate_registry")
     print("Iceberg table location:", table.location())
     print("Iceberg table schema:", table.schema())
-
 finally:
-    # JM Comment: Log shutdown progress to identify subprocess hangs.
-    print("JM DEBUG: Before ray.shutdown()", flush=True)
+    # JM Comment: Shut down the Ray client after the Iceberg stage.
     ray.shutdown()
-    print("JM DEBUG: After ray.shutdown()", flush=True)
