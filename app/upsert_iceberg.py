@@ -109,5 +109,7 @@ try:
     print("Iceberg table schema:", table.schema())
 
 finally:
-    # JM Comment: Shut down this client's Ray connection.
+    # JM Comment: Log shutdown progress to identify subprocess hangs.
+    print("JM DEBUG: Before ray.shutdown()", flush=True)
     ray.shutdown()
+    print("JM DEBUG: After ray.shutdown()", flush=True)
