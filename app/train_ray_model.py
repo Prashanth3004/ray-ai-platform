@@ -165,7 +165,7 @@ def main():
                 "input_size": X_train.shape[1],
                 "epochs": 10,
             },
-            scaling_config=ScalingConfig(num_workers=2, use_gpu=False),
+            scaling_config=ScalingConfig(num_workers=1, use_gpu=False),
         )
 
         result = trainer.fit()
