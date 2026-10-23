@@ -1,4 +1,5 @@
-﻿# JM Comment: Run the Ray pipeline in a dedicated Ray cluster for this CI build.
+﻿
+# JM Comment: Run the Ray pipeline in a dedicated Ray cluster for this CI build.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
@@ -16,6 +17,7 @@ spec:
       rayStartParams:
         dashboard-host: "0.0.0.0"
         num-cpus: "1"
+        memory: "536870912"
       template:
         spec:
           serviceAccountName: ray-ai
@@ -29,11 +31,11 @@ spec:
                   value: ray-ai-platform-145023571604
               resources:
                 requests:
+                  cpu: "250m"
+                  memory: "512Mi"
+                limits:
                   cpu: "500m"
                   memory: "1Gi"
-                limits:
-                  cpu: "1"
-                  memory: "3Gi"
     workerGroupSpecs:
       - groupName: ray-workers
         replicas: 1
