@@ -7,4 +7,3 @@ scikit-learn
 typing_extensions
 boto3
 pyiceberg[glue]
-torch

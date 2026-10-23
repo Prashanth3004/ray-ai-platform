@@ -1,4 +1,3 @@
 # Additional dependencies for distributed PyTorch training.
 -r requirements.txt
 ray[train]==2.59.0
-torch
