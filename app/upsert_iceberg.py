@@ -1,45 +1,171 @@
 
-# JM Comment: Resolve S3 datasets and transactionally upsert unique registrations into Iceberg.
+"""Load corporate datasets from S3 and upsert records into Iceberg."""
+
 import os
-import ray
+import tempfile
+from pathlib import Path
+
+import boto3
+import pandas as pd
 import pyarrow as pa
 from pyiceberg.catalog import load_catalog
-from ray_pipeline import ingest_data, resolve_entities
 
 
-# JM Comment: Connect to the existing KubeRay cluster.
-ray.init(address=os.getenv("RAY_ADDRESS", "auto"))
+AWS_REGION = "us-east-1"
+S3_BUCKET = os.getenv("S3_BUCKET")
+S3_PREFIX = os.getenv("S3_PREFIX", "datasets").strip("/")
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
-try:
-    # JM Comment: Load both S3 datasets and resolve corporate entities.
-    data = ingest_data()
+FILENAMES = ["supply_chain.csv", "financial_data.csv"]
+
+REQUIRED_COLUMNS = {
+    "source_record_id",
+    "corporate_name",
+    "registration_id",
+    "industry",
+    "country",
+    "employee_count",
+    "annual_revenue",
+    "source_system",
+}
+
+OUTPUT_COLUMNS = [
+    "registration_id",
+    "canonical_id",
+    "corporate_name",
+    "normalized_name",
+    "is_resolved",
+    "annual_revenue",
+    "employee_count",
+    "industry",
+    "country",
+]
+
+
+def load_datasets():
+    """Read CSV files directly from S3 or local development files."""
+
+    frames = []
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        s3 = boto3.client("s3", region_name=AWS_REGION) if S3_BUCKET else None
+
+        for filename in FILENAMES:
+            if S3_BUCKET:
+                local_file = temp_path / filename
+                key = f"{S3_PREFIX}/{filename}" if S3_PREFIX else filename
+
+                print(f"Downloading s3://{S3_BUCKET}/{key}", flush=True)
+                s3.download_file(S3_BUCKET, key, str(local_file))
+            else:
+                local_file = DATA_DIR / filename
+
+                if not local_file.is_file():
+                    raise FileNotFoundError(
+                        f"Required dataset not found: {local_file}"
+                    )
+
+            frame = pd.read_csv(
+                local_file,
+                dtype={"registration_id": "string"},
+            )
+
+            missing = REQUIRED_COLUMNS - set(frame.columns)
+            if missing:
+                raise ValueError(
+                    f"{filename} is missing columns: {sorted(missing)}"
+                )
+
+            frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    combined["corporate_name"] = (
+        combined["corporate_name"].astype("string").str.strip()
+    )
+    combined["registration_id"] = (
+        combined["registration_id"].astype("string").str.strip()
+    )
+    combined["employee_count"] = pd.to_numeric(
+        combined["employee_count"], errors="coerce"
+    )
+    combined["annual_revenue"] = pd.to_numeric(
+        combined["annual_revenue"], errors="coerce"
+    )
+
+    invalid = (
+        combined["corporate_name"].isna()
+        | combined["corporate_name"].eq("")
+        | combined["registration_id"].isna()
+        | combined["registration_id"].eq("")
+        | combined["employee_count"].isna()
+        | combined["annual_revenue"].isna()
+    )
+
+    invalid_count = int(invalid.sum())
+    if invalid_count:
+        print(f"Skipping {invalid_count} invalid records.", flush=True)
+
+    combined = combined.loc[~invalid].reset_index(drop=True)
+
+    print(f"Total records loaded: {len(combined)}", flush=True)
+    print(
+        "Supply-chain records: "
+        f"{(combined['source_system'] == 'SupplyChain').sum()}",
+        flush=True,
+    )
+    print(
+        "Financial records: "
+        f"{(combined['source_system'] == 'Financial').sum()}",
+        flush=True,
+    )
+
+    return combined
+
+
+def resolve_entities(data):
+    """Generate stable canonical IDs using registration IDs."""
+
+    resolved = data.copy()
+
+    resolved["normalized_name"] = (
+        resolved["corporate_name"]
+        .astype("string")
+        .str.lower()
+        .str.replace(r"[^a-z0-9]+", " ", regex=True)
+        .str.strip()
+    )
+
+    registration = (
+        resolved["registration_id"].astype("string").str.strip().str.upper()
+    )
+
+    if registration.isna().any() or registration.eq("").any():
+        raise ValueError("Every record requires a registration ID.")
+
+    resolved["registration_id"] = registration
+    resolved["canonical_id"] = "CORP-" + registration
+    resolved["is_resolved"] = True
+
+    return resolved
+
+
+def main():
+    if not S3_BUCKET:
+        raise EnvironmentError("S3_BUCKET must be configured.")
+
+    print("===== START: Direct S3 ingestion =====", flush=True)
+
+    data = load_datasets()
     resolved = resolve_entities(data)
 
-    columns = [
-        "registration_id",
-        "canonical_id",
-        "corporate_name",
-        "normalized_name",
-        "is_resolved",
-        "annual_revenue",
-        "employee_count",
-        "industry",
-        "country",
-    ]
+    for column in OUTPUT_COLUMNS:
+        if column not in resolved.columns:
+            resolved[column] = None
 
-    # JM Comment: Add optional fields missing from the source data.
-    for col in columns:
-        if col not in resolved.columns:
-            resolved[col] = None
+    records = resolved[OUTPUT_COLUMNS].copy()
 
-    records = resolved[columns].copy()
-    records["registration_id"] = records["registration_id"].astype("string").str.strip()
-
-    # JM Comment: Reject missing registration IDs before deduplication.
-    if records["registration_id"].isna().any() or records["registration_id"].eq("").any():
-        raise ValueError("Source data contains missing registration IDs.")
-
-    # JM Comment: Deduplicate by registration ID before the Iceberg upsert.
     records = records.sort_values(
         by=["registration_id", "corporate_name"],
         na_position="last",
@@ -52,16 +178,18 @@ try:
     if records["registration_id"].duplicated().any():
         raise ValueError("Duplicate registration IDs remain after deduplication.")
 
-    # JM Comment: Normalize fields and numeric types to match the Iceberg schema.
     records["registration_id"] = records["registration_id"].astype(str)
     records["canonical_id"] = records["canonical_id"].astype(str)
-    records["is_resolved"] = records["is_resolved"].fillna(False).astype(bool)
+    records["is_resolved"] = records["is_resolved"].astype(bool)
     records["annual_revenue"] = records["annual_revenue"].astype("float64")
+    records["employee_count"] = records["employee_count"].astype("int64")
 
-    print("Source rows:", len(resolved))
-    print("Unique registration IDs for upsert:", len(records))
+    print(f"Source rows: {len(resolved)}", flush=True)
+    print(
+        f"Unique registration IDs for upsert: {len(records)}",
+        flush=True,
+    )
 
-    # JM Comment: Explicitly define required and optional Arrow fields.
     arrow_schema = pa.schema([
         pa.field("registration_id", pa.string(), nullable=False),
         pa.field("canonical_id", pa.string(), nullable=False),
@@ -74,7 +202,6 @@ try:
         pa.field("country", pa.string(), nullable=True),
     ])
 
-    # JM Comment: Convert records using the explicit Arrow schema.
     arrow_table = pa.Table.from_pandas(
         records,
         schema=arrow_schema,
@@ -82,17 +209,21 @@ try:
         safe=True,
     )
 
+    print("===== START: Iceberg catalog connection =====", flush=True)
+
     catalog = load_catalog(
         "glue",
         **{
             "type": "glue",
-            "glue.region": "us-east-1",
-            "warehouse": "s3://ray-ai-platform-145023571604/iceberg/",
+            "glue.region": AWS_REGION,
+            "warehouse": f"s3://{S3_BUCKET}/iceberg/",
         },
     )
+
     table = catalog.load_table("corporate_registry.corporate_registry")
 
-    # JM Comment: Atomically update matching registrations and insert new ones.
+    print("===== START: Iceberg upsert =====", flush=True)
+
     result = table.upsert(
         arrow_table,
         join_cols=["registration_id"],
@@ -100,18 +231,12 @@ try:
         when_not_matched_insert_all=True,
     )
 
-    print("Iceberg upsert completed.")
-    print("Upsert result:", result)
+    print("Iceberg upsert completed.", flush=True)
+    print(f"Upsert result: {result}", flush=True)
+    print(f"Iceberg table location: {table.location()}", flush=True)
+    print(f"Iceberg table schema: {table.schema()}", flush=True)
+    print("===== SUCCESS: Iceberg upsert =====", flush=True)
 
-    # JM Comment: Reload the table metadata after the transaction.
-    table = catalog.load_table("corporate_registry.corporate_registry")
-    print("Iceberg table location:", table.location())
-    print("Iceberg table schema:", table.schema())
-finally:
-    print("JM DEBUG: Before ray.shutdown()", flush=True)
-    try:
-        ray.shutdown()
-        print("JM DEBUG: After ray.shutdown()", flush=True)
-    except Exception as exc:
-        print(f"JM DEBUG: ray.shutdown() failed: {exc!r}", flush=True)
-        raise
+
+if __name__ == "__main__":
+    main()

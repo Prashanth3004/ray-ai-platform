@@ -1,16 +1,19 @@
 
-# JM Comment: Ingest local or S3 corporate datasets with Ray Data and resolve entities.
+# JM Comment: Ingest corporate datasets with Ray Data and resolve entities.
+
 import os
-import tempfile
 from pathlib import Path
 
 import pandas as pd
 import ray
 import ray.data
 
-DATA_DIR = Path(__file__).parent / "data"
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
 S3_BUCKET = os.getenv("S3_BUCKET")
-S3_PREFIX = os.getenv("S3_PREFIX", "datasets")
+S3_PREFIX = os.getenv("S3_PREFIX", "datasets").strip("/")
+
+FILENAMES = ["supply_chain.csv", "financial_data.csv"]
 
 REQUIRED_COLUMNS = {
     "source_record_id",
@@ -25,42 +28,52 @@ REQUIRED_COLUMNS = {
 
 
 def ingest_data(data_dir: Path = DATA_DIR) -> pd.DataFrame:
-    """Read corporate datasets directly from S3 or local development files."""
-    filenames = ["supply_chain.csv", "financial_data.csv"]
+    """Read corporate datasets from S3 or local files using Ray Data."""
 
-    # JM Comment: Reuse the existing KubeRay runtime when available.
     started_ray_here = not ray.is_initialized()
+
     if started_ray_here:
-        ray.init(num_cpus=2, include_dashboard=False)
+        ray_address = os.getenv("RAY_ADDRESS")
+        if ray_address:
+            ray.init(address=ray_address)
+        else:
+            ray.init(num_cpus=2, include_dashboard=False)
 
     try:
         datasets = []
-        for filename in filenames:
+
+        for filename in FILENAMES:
             if S3_BUCKET:
-                # JM Comment: Use shared S3 storage instead of head-local temporary files.
-                path = (
-                    f"s3://{S3_BUCKET}/"
-                    f"{S3_PREFIX.rstrip('/')}/{filename}"
+                key = (
+                    f"{S3_PREFIX}/{filename}"
+                    if S3_PREFIX
+                    else filename
                 )
+                path = f"s3://{S3_BUCKET}/{key}"
             else:
-                # JM Comment: Keep local file support for development and tests.
                 path = str(data_dir / filename)
+
                 if not Path(path).is_file():
                     raise FileNotFoundError(
                         f"Required dataset not found: {path}"
                     )
 
+            print(f"Reading dataset: {path}", flush=True)
+
             dataset = ray.data.read_csv(path)
+
             missing = REQUIRED_COLUMNS - set(dataset.schema().names)
             if missing:
                 raise ValueError(
                     f"{filename} is missing columns: {sorted(missing)}"
                 )
+
             datasets.append(dataset)
 
-        # JM Comment: Combine datasets after Ray reads them from shared storage.
         combined = datasets[0].union(datasets[1]).to_pandas()
+
     finally:
+        # JM Comment: Only shut down Ray if this function initialized it.
         if started_ray_here:
             ray.shutdown()
 
@@ -74,7 +87,10 @@ def ingest_data(data_dir: Path = DATA_DIR) -> pd.DataFrame:
         combined["corporate_name"].astype("string").str.strip()
     )
 
-    registration = combined["registration_id"].astype("string").str.strip()
+    registration = (
+        combined["registration_id"].astype("string").str.strip()
+    )
+
     invalid = (
         combined["corporate_name"].isna()
         | combined["corporate_name"].eq("")
@@ -85,108 +101,35 @@ def ingest_data(data_dir: Path = DATA_DIR) -> pd.DataFrame:
     )
 
     invalid_count = int(invalid.sum())
+
     if invalid_count:
-        print(f"Warning: {invalid_count} invalid records detected.")
+        print(
+            f"Warning: {invalid_count} invalid records detected.",
+            flush=True,
+        )
 
     combined = combined.loc[~invalid].reset_index(drop=True)
 
-    print(f"Total records loaded: {len(combined)}")
+    print(f"Total records loaded: {len(combined)}", flush=True)
     print(
         "Supply-chain records: "
-        f"{(combined['source_system'] == 'SupplyChain').sum()}"
+        f"{(combined['source_system'] == 'SupplyChain').sum()}",
+        flush=True,
     )
     print(
         "Financial records: "
-        f"{(combined['source_system'] == 'Financial').sum()}"
-    )
-    return combined
-
-    """Read both CSV datasets locally or download them from S3."""
-    filenames = ["supply_chain.csv", "financial_data.csv"]
-
-    # JM Comment: Use a temporary directory so S3 ingestion leaves no permanent local copies.
-    with tempfile.TemporaryDirectory() as temp_dir:
-        source_dir = Path(temp_dir) if S3_BUCKET else data_dir
-        files = [source_dir / name for name in filenames]
-
-        if S3_BUCKET:
-            import boto3
-
-            s3 = boto3.client("s3")
-            for filename, path in zip(filenames, files):
-                key = f"{S3_PREFIX.rstrip('/')}/{filename}"
-                s3.download_file(S3_BUCKET, key, str(path))
-        else:
-            for path in files:
-                if not path.is_file():
-                    raise FileNotFoundError(
-                        f"Required dataset not found: {path}"
-                    )
-
-        # JM Comment: Reuse an existing Ray runtime when running inside KubeRay.
-        started_ray_here = not ray.is_initialized()
-        if started_ray_here:
-            ray.init(num_cpus=2, include_dashboard=False)
-
-        try:
-            datasets = []
-            for path in files:
-                dataset = ray.data.read_csv(str(path))
-                missing = REQUIRED_COLUMNS - set(dataset.schema().names)
-                if missing:
-                    raise ValueError(
-                        f"{path.name} is missing columns: {sorted(missing)}"
-                    )
-                datasets.append(dataset)
-
-            combined = datasets[0].union(datasets[1]).to_pandas()
-        finally:
-            if started_ray_here:
-                ray.shutdown()
-
-    combined["employee_count"] = pd.to_numeric(
-        combined["employee_count"], errors="coerce"
-    )
-    combined["annual_revenue"] = pd.to_numeric(
-        combined["annual_revenue"], errors="coerce"
-    )
-    combined["corporate_name"] = combined["corporate_name"].astype(
-        "string"
-    ).str.strip()
-
-    registration = combined["registration_id"].astype("string").str.strip()
-    invalid = (
-        combined["corporate_name"].isna()
-        | combined["corporate_name"].eq("")
-        | registration.isna()
-        | registration.eq("")
-        | combined["employee_count"].isna()
-        | combined["annual_revenue"].isna()
+        f"{(combined['source_system'] == 'Financial').sum()}",
+        flush=True,
     )
 
-    invalid_count = int(invalid.sum())
-    if invalid_count:
-        print(f"Warning: {invalid_count} invalid records detected.")
-
-    combined = combined.loc[~invalid].reset_index(drop=True)
-
-    print(f"Total records loaded: {len(combined)}")
-    print(
-        "Supply-chain records: "
-        f"{(combined['source_system'] == 'SupplyChain').sum()}"
-    )
-    print(
-        "Financial records: "
-        f"{(combined['source_system'] == 'Financial').sum()}"
-    )
     return combined
 
 
 def resolve_entities(df: pd.DataFrame) -> pd.DataFrame:
-    """Assign a stable canonical ID using registration IDs."""
+    """Assign stable canonical IDs using registration IDs."""
+
     result = df.copy()
 
-    # JM Comment: Normalize names for auditability while using registration IDs as the match key.
     result["normalized_name"] = (
         result["corporate_name"]
         .astype("string")
@@ -196,26 +139,36 @@ def resolve_entities(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     registration = (
-        result["registration_id"].astype("string").str.strip().str.upper()
+        result["registration_id"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
     )
+
     missing = registration.isna() | registration.eq("")
+
     if missing.any():
         raise ValueError("Every record requires a registration ID.")
 
+    result["registration_id"] = registration
     result["canonical_id"] = "CORP-" + registration
     result["is_resolved"] = True
+
     return result
 
 
 @ray.remote
 def resolve_entities_task(df: pd.DataFrame) -> pd.DataFrame:
-    # JM Comment: Expose entity resolution as a Ray remote task.
+    """Run entity resolution as a Ray task."""
+
     return resolve_entities(df)
 
 
-if __name__ == "__main__":
-    # JM Comment: Connect to KubeRay when RAY_ADDRESS is set; otherwise use local Ray.
+def main():
+    """Run the standalone distributed entity-resolution workflow."""
+
     ray_address = os.getenv("RAY_ADDRESS")
+
     if ray_address:
         ray.init(address=ray_address)
     else:
@@ -224,20 +177,33 @@ if __name__ == "__main__":
     try:
         data = ingest_data()
         resolved = ray.get(resolve_entities_task.remote(data))
+
+        print("\nResolved sample:", flush=True)
+        print(
+            resolved[
+                [
+                    "corporate_name",
+                    "registration_id",
+                    "canonical_id",
+                    "is_resolved",
+                ]
+            ].head(5).to_string(index=False),
+            flush=True,
+        )
+
+        print(f"\nTotal records: {len(resolved)}", flush=True)
+        print(
+            f"Unique companies: {resolved['canonical_id'].nunique()}",
+            flush=True,
+        )
+        print(
+            f"Resolved records: {int(resolved['is_resolved'].sum())}",
+            flush=True,
+        )
+
     finally:
         ray.shutdown()
 
-    print("\nResolved sample:")
-    print(
-        resolved[
-            [
-                "corporate_name",
-                "registration_id",
-                "canonical_id",
-                "is_resolved",
-            ]
-        ].head(5).to_string(index=False)
-    )
-    print(f"\nTotal records: {len(resolved)}")
-    print(f"Unique companies: {resolved['canonical_id'].nunique()}")
-    print(f"Resolved records: {int(resolved['is_resolved'].sum())}")
+
+if __name__ == "__main__":
+    main()
