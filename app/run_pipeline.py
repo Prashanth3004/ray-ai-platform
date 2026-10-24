@@ -32,11 +32,12 @@ def main():
             )
 
         print(f"\n===== START: {stage_name} =====", flush=True)
-        subprocess.run(
+        result = subprocess.run(
             [sys.executable, str(script_path)],
             cwd=str(APP_DIR),
             check=True,
             env=env,
+            timeout=600,
         )
         print(f"===== SUCCESS: {stage_name} =====", flush=True)
 
