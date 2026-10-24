@@ -108,5 +108,10 @@ try:
     print("Iceberg table location:", table.location())
     print("Iceberg table schema:", table.schema())
 finally:
-    # JM Comment: Shut down the Ray client after the Iceberg stage.
-    ray.shutdown()
+    print("JM DEBUG: Before ray.shutdown()", flush=True)
+    try:
+        ray.shutdown()
+        print("JM DEBUG: After ray.shutdown()", flush=True)
+    except Exception as exc:
+        print(f"JM DEBUG: ray.shutdown() failed: {exc!r}", flush=True)
+        raise
