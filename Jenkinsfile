@@ -132,8 +132,8 @@ stage('Trigger RayJob') {
               sleep 10
             done
 
-            echo "RayJob timed out after 30 minutes."
-            kubectl describe rayjob ray-ai-pipeline -n default
+echo "RayJob timed out after 30 minutes."
+kubectl describe rayjob ray-ai-pipeline -n default
             exit 1
         '''
     }
