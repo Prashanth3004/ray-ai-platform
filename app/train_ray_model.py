@@ -24,6 +24,14 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 S3_PREFIX = os.getenv("S3_PREFIX", "datasets")
 ARTIFACT_PREFIX = os.getenv("ARTIFACT_PREFIX", "artifacts")
 
+# JM Comment: Single source of truth for the Ray Train worker count.
+NUM_TRAIN_WORKERS = 1
+
+
+def unwrap_model(model):
+    # JM Comment: Ray wraps the model in DistributedDataParallel only when more than one worker runs.
+    return model.module if hasattr(model, "module") else model
+
 
 class RevenueRegressor(nn.Module):
     def __init__(self, input_size: int):
@@ -83,7 +91,7 @@ def train_loop_per_worker(config):
                 checkpoint_path = Path(temp_dir) / "model.pt"
                 torch.save(
                     {
-                        "model_state_dict": model.module.state_dict(),
+                        "model_state_dict": unwrap_model(model).state_dict(),
                         "input_size": config["input_size"],
                     },
                     checkpoint_path,
@@ -165,7 +173,7 @@ def main():
                 "input_size": X_train.shape[1],
                 "epochs": 10,
             },
-            scaling_config=ScalingConfig(num_workers=1, use_gpu=False),
+            scaling_config=ScalingConfig(num_workers=NUM_TRAIN_WORKERS, use_gpu=False),
         )
 
         result = trainer.fit()
@@ -194,7 +202,7 @@ def main():
 
         metrics = {
             "status": "SUCCESS",
-            "workers": 2,
+            "workers": NUM_TRAIN_WORKERS,
             "records_used": int(len(df)),
             "training_records": int(len(X_train)),
             "test_records": int(len(X_test)),
