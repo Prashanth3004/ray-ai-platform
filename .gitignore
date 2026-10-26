@@ -38,3 +38,7 @@ __pycache__/
 *.pyc
 .env
 
+
+# Generated ML artifacts
+*.pt
+artifacts/
