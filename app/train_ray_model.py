@@ -2,6 +2,7 @@
 # JM Comment: Train, checkpoint, evaluate, and persist a revenue model with Ray Train and PyTorch.
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pandas as pd
 import ray
 import torch
 from ray import train
-from ray.train import Checkpoint, ScalingConfig
+from ray.train import Checkpoint, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -174,6 +175,14 @@ def main():
                 "epochs": 10,
             },
             scaling_config=ScalingConfig(num_workers=NUM_TRAIN_WORKERS, use_gpu=False),
+            # JM Comment: Ray Train v2 needs storage every pod can reach; local /root/ray_results is per-pod.
+            run_config=(
+                RunConfig(
+                    storage_path=f"s3://{S3_BUCKET}/{ARTIFACT_PREFIX.strip('/')}/ray-train"
+                )
+                if S3_BUCKET
+                else None
+            ),
         )
 
         result = trainer.fit()
@@ -265,4 +274,20 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import faulthandler
+    import traceback
+
+    # Diagnostic: print every thread's stack if this process is still alive after 15 minutes.
+    faulthandler.dump_traceback_later(900, repeat=True, file=sys.stderr)
+
+    exit_code = 0
+    try:
+        main()
+    except BaseException:
+        traceback.print_exc()
+        exit_code = 1
+    finally:
+        # Skip interpreter teardown, which can hang after pyarrow S3 use.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
