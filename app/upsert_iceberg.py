@@ -240,7 +240,11 @@ def main():
 
 
 if __name__ == "__main__":
+    import faulthandler
     import traceback
+
+    # Diagnostic: print every thread's stack if this process is still alive after 3 minutes.
+    faulthandler.dump_traceback_later(180, repeat=True, file=sys.stderr)
 
     exit_code = 0
     try:
@@ -249,13 +253,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         exit_code = 1
     finally:
-        # Release pyarrow's S3 resources, then skip interpreter teardown, which hangs here.
-        try:
-            import pyarrow.fs as pafs
-
-            pafs.finalize_s3()
-        except Exception:
-            pass
+        # Skip interpreter teardown, which hangs after the S3 work finishes.
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(exit_code)
