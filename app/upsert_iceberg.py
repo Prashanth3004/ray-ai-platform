@@ -2,6 +2,7 @@
 """Load corporate datasets from S3 and upsert records into Iceberg."""
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -239,4 +240,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+
+    exit_code = 0
+    try:
+        main()
+    except BaseException:
+        traceback.print_exc()
+        exit_code = 1
+    finally:
+        # Release pyarrow's S3 resources, then skip interpreter teardown, which hangs here.
+        try:
+            import pyarrow.fs as pafs
+
+            pafs.finalize_s3()
+        except Exception:
+            pass
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
