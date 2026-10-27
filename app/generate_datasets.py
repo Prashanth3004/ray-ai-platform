@@ -13,7 +13,7 @@ INDUSTRIES = [
 ]
 COUNTRIES = ["India", "USA", "UK", "Germany", "Singapore"]
 
-# JM Comment: Industry-specific revenue multipliers create a learnable signal for regression.
+# Industry-specific revenue multipliers create a learnable signal for regression.
 INDUSTRY_REVENUE_MULTIPLIERS = {
     "Manufacturing": 1.2,
     "Technology": 2.0,
@@ -35,7 +35,7 @@ def make_record(source, i, company_number, name):
     country = COUNTRIES[(i - 1) % len(COUNTRIES)]
     employee_count = 50 + ((i * 37) % 9950)
 
-    # JM Comment: Revenue depends on workforce size and industry, with reproducible variation.
+    # Revenue depends on workforce size and industry, with reproducible variation.
     industry_multiplier = INDUSTRY_REVENUE_MULTIPLIERS[industry]
     variation = 0.85 + ((i * 17) % 31) / 100
     annual_revenue = int(
