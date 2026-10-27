@@ -1,4 +1,4 @@
-﻿# JM Comment: Submit the corporate data pipeline to the existing RayCluster.
+﻿#  Submit the corporate data pipeline to the existing RayCluster.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
