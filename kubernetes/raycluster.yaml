@@ -1,4 +1,4 @@
-﻿# JM Comment: Define a cost-conscious Ray cluster managed by KubeRay.
+﻿#  Define a cost-conscious Ray cluster managed by KubeRay.
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
