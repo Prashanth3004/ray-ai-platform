@@ -1,5 +1,5 @@
 
-# JM Comment: Train, checkpoint, evaluate, and persist a revenue model with Ray Train and PyTorch.
+#  Train, checkpoint, evaluate, and persist a revenue model with Ray Train and PyTorch.
 import json
 import os
 import sys
@@ -19,18 +19,18 @@ from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-# JM Comment: Configure the existing local data directory and optional S3 source.
+#  Configure the existing local data directory and optional S3 source.
 DATA_DIR = Path(__file__).parent / "data"
 S3_BUCKET = os.getenv("S3_BUCKET")
 S3_PREFIX = os.getenv("S3_PREFIX", "datasets")
 ARTIFACT_PREFIX = os.getenv("ARTIFACT_PREFIX", "artifacts")
 
-# JM Comment: Single source of truth for the Ray Train worker count.
+#  Single source of truth for the Ray Train worker count.
 NUM_TRAIN_WORKERS = 1
 
 
 def unwrap_model(model):
-    # JM Comment: Ray wraps the model in DistributedDataParallel only when more than one worker runs.
+    #  Ray wraps the model in DistributedDataParallel only when more than one worker runs.
     return model.module if hasattr(model, "module") else model
 
 
@@ -50,7 +50,7 @@ class RevenueRegressor(nn.Module):
 
 
 def train_loop_per_worker(config):
-    # JM Comment: Ray Train shards the training dataset and synchronizes gradients.
+    #  Ray Train shards the training dataset and synchronizes gradients.
     torch.manual_seed(42)
 
     X = torch.tensor(config["X_train"], dtype=torch.float32)
@@ -86,7 +86,7 @@ def train_loop_per_worker(config):
             "epoch": epoch + 1,
         }
 
-        # JM Comment: Only rank zero writes the checkpoint for each training run.
+        #  Only rank zero writes the checkpoint for each training run.
         if train.get_context().get_world_rank() == 0:
             with tempfile.TemporaryDirectory() as temp_dir:
                 checkpoint_path = Path(temp_dir) / "model.pt"
@@ -106,7 +106,7 @@ def train_loop_per_worker(config):
 
 
 def load_datasets():
-    # JM Comment: Read both datasets from S3 when configured, otherwise use local CSVs.
+    #  Read both datasets from S3 when configured, otherwise use local CSVs.
     filenames = ["supply_chain.csv", "financial_data.csv"]
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -127,12 +127,12 @@ def load_datasets():
 
         frames = [pd.read_csv(path) for path in paths]
 
-    # JM Comment: Combine datasets after their temporary local copies are closed.
+    #  Combine datasets after their temporary local copies are closed.
     return pd.concat(frames, ignore_index=True)
 
 
 def main():
-    # JM Comment: Connect to the existing KubeRay cluster.
+    #  Connect to the existing KubeRay cluster.
     ray.init(address="auto", include_dashboard=False)
 
     try:
@@ -159,7 +159,7 @@ def main():
             random_state=42,
         )
 
-        # JM Comment: Scale the target to improve neural-network optimization.
+        #  Scale the target to improve neural-network optimization.
         revenue_scale = float(np.mean(y_train))
         if not np.isfinite(revenue_scale) or revenue_scale == 0:
             raise ValueError("Training target mean must be finite and non-zero.")
@@ -175,7 +175,7 @@ def main():
                 "epochs": 10,
             },
             scaling_config=ScalingConfig(num_workers=NUM_TRAIN_WORKERS, use_gpu=False),
-            # JM Comment: Ray Train v2 needs storage every pod can reach; local /root/ray_results is per-pod.
+            #  Ray Train v2 needs storage every pod can reach; local /root/ray_results is per-pod.
             run_config=(
                 RunConfig(
                     storage_path=f"s3://{S3_BUCKET}/{ARTIFACT_PREFIX.strip('/')}/ray-train"
@@ -221,7 +221,7 @@ def main():
             "revenue_scale": revenue_scale,
         }
 
-        # JM Comment: Include inference metadata in the saved model artifact.
+        #  Include inference metadata in the saved model artifact.
         checkpoint["feature_columns"] = feature_columns
         checkpoint["revenue_scale"] = revenue_scale
 
@@ -235,7 +235,7 @@ def main():
                 encoding="utf-8",
             )
 
-            # JM Comment: Persist artifacts to S3 when configured; otherwise save locally.
+            #  Persist artifacts to S3 when configured; otherwise save locally.
             if S3_BUCKET:
                 s3 = boto3.client("s3")
                 prefix = ARTIFACT_PREFIX.strip("/")
@@ -269,7 +269,7 @@ def main():
         print(f"R²: {metrics['r2']:.4f}")
 
     finally:
-        # JM Comment: Disconnect this client without changing cluster configuration.
+        #  Disconnect this client without changing cluster configuration.
         ray.shutdown()
 
 
