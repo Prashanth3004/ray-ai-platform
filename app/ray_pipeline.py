@@ -1,5 +1,5 @@
 
-# JM Comment: Ingest corporate datasets with Ray Data and resolve entities.
+#  Ingest corporate datasets with Ray Data and resolve entities.
 
 import os
 from pathlib import Path
@@ -73,7 +73,7 @@ def ingest_data(data_dir: Path = DATA_DIR) -> pd.DataFrame:
         combined = datasets[0].union(datasets[1]).to_pandas()
 
     finally:
-        # JM Comment: Only shut down Ray if this function initialized it.
+        #  Only shut down Ray if this function initialized it.
         if started_ray_here:
             ray.shutdown()
 
