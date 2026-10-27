@@ -1,5 +1,5 @@
 ﻿
-# JM Comment: Run the entity-resolution and model-training pipeline on KubeRay.
+#  Run the entity-resolution and model-training pipeline on KubeRay.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
@@ -10,13 +10,13 @@ metadata:
     component: data-pipeline
 
 spec:
-  # JM Comment: Keep the job alive long enough for the pipeline to complete.
+  #  Keep the job alive long enough for the pipeline to complete.
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
 
   entrypoint: python /workspace/app/run_pipeline.py
 
-  # JM Comment: Reuse the ECR image built and tagged by the Jenkins pipeline.
+  #  Reuse the ECR image built and tagged by the Jenkins pipeline.
   runtimeEnvYAML: |
     env_vars:
       S3_BUCKET: "ray-ai-platform-145023571604"
@@ -28,7 +28,7 @@ spec:
     rayVersion: "2.59.0"
 
     headGroupSpec:
-      # JM Comment: Keep the Ray head on the On-Demand system node pool.
+      #  Keep the Ray head on the On-Demand system node pool.
       rayStartParams:
         dashboard-host: "0.0.0.0"
         num-cpus: "0"
@@ -61,7 +61,7 @@ spec:
                 - name: client
                   containerPort: 10001
 
-    # JM Comment: Schedule Ray workers on the Spot worker node pool.
+    #  Schedule Ray workers on the Spot worker node pool.
     workerGroupSpecs:
       - groupName: ray-worker
         replicas: 1
